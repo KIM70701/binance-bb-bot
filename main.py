@@ -2,6 +2,7 @@ import json
 import time
 import threading
 import requests
+import urllib.parse
 import pandas as pd
 import websocket
 from flask import Flask
@@ -46,107 +47,12 @@ def send_telegram_message(message):
     except Exception as e:
         print(f"텔레그램 전송 실패: {e}")
 
-# === 1봉 전 확정된 볼린저밴드 값 계산 (초기 버전 복구 + 오류 로깅 유지) ===
+# === 1봉 전 확정된 볼린저밴드 값 계산 (3중 우회망 + 브라우저 위장) ===
 def update_bollinger_bands():
     global prev_upper, prev_lower
     
-    # 원래 접속하려던 바이낸스 공식 주소 (fapi)
-    url = f"https://fapi.binance.com/fapi/v1/klines?symbol={SYMBOL.upper()}&interval={INTERVAL}&limit=100"
+    timestamp = int(time.time() * 1000)
+    target_url = f"https://fapi.binance.com/fapi/v1/klines?symbol={SYMBOL.upper()}&interval={INTERVAL}&limit=100&_t={timestamp}"
+    encoded_url = urllib.parse.quote(target_url, safe='')
     
-    try:
-        res = requests.get(url, timeout=10)
-        data = res.json()
-        
-        # [진단용] REST API 원본 응답 확인 (IP 밴 확인용)
-        print(f"[REST 원본 응답] {str(data)[:200]}") 
-        
-        # 데이터가 리스트(정상적인 차트 데이터)가 아니라 딕셔너리(에러 메시지) 형태일 경우 차단 사유 출력
-        if isinstance(data, dict):
-            print(f"❌ 바이낸스 API 거절 사유 확인됨: {data}")
-            return
-            
-        df = pd.DataFrame(data[:-1], columns=['Open_time', 'Open', 'High', 'Low', 'Close', 'Volume', 'Close_time', 'QA', 'Trades', 'Taker_buy_base', 'Taker_buy_quote', 'Ignore'])
-        df['Close'] = df['Close'].astype(float)
-        
-        df['MA'] = df['Close'].rolling(window=PERIOD).mean()
-        df['STD'] = df['Close'].rolling(window=PERIOD).std()
-        df['Upper'] = df['MA'] + (df['STD'] * MULTIPLIER)
-        df['Lower'] = df['MA'] - (df['STD'] * MULTIPLIER)
-        
-        prev_upper = round(df['Upper'].iloc[-1], 2)
-        prev_lower = round(df['Lower'].iloc[-1], 2)
-        
-        print(f"[기준선 갱신 성공] 1봉 전 상단: {prev_upper}, 하단: {prev_lower}")
-    except Exception as e:
-        print(f"BB 계산 중 에러 발생: {e}")
-
-# === 바이낸스 웹소켓 메시지 처리 로직 ===
-def on_message(ws, message):
-    global alert_sent_this_candle, current_kline_start_time, prev_upper, prev_lower
-    
-    # [진단용] 웹소켓 원본 메시지 수신 확인 (IP 변경 후 수신 재개 확인용)
-    print(f"[WS 수신 데이터] {str(message)[:200]}")
-    
-    data = json.loads(message)
-    if 'k' not in data:
-        return
-        
-    kline = data['k']
-    start_time = kline['t']
-    open_price = float(kline['o'])
-    current_price = float(kline['c'])
-    
-    if start_time != current_kline_start_time:
-        current_kline_start_time = start_time
-        alert_sent_this_candle = False
-        print(f"--- 새로운 15분 캔들 시작됨 ---")
-        update_bollinger_bands()
-
-    if alert_sent_this_candle:
-        return
-
-    # 기준선이 정상적으로 한 번이라도 계산된 이후에만 조건 판별
-    if prev_upper > 0 and prev_lower > 0:
-        if (open_price < prev_upper) and (current_price >= prev_upper):
-            msg = f"🚀 <b>ETHUSDT 상단 돌파!</b>\n\n현재가: {current_price}\nBB 상단: {prev_upper}\n\n차트를 확인하세요!"
-            send_telegram_message(msg)
-            alert_sent_this_candle = True
-
-        elif (open_price > prev_lower) and (current_price <= prev_lower):
-            msg = f"📉 <b>ETHUSDT 하단 이탈!</b>\n\n현재가: {current_price}\nBB 하단: {prev_lower}\n\n차트를 확인하세요!"
-            send_telegram_message(msg)
-            alert_sent_this_candle = True
-
-def on_error(ws, error):
-    print(f"웹소켓 에러 발생: {error}")
-
-def on_close(ws, close_status_code, close_msg):
-    print(f"웹소켓 연결 종료 (코드: {close_status_code}, 사유: {close_msg}). 5초 뒤 재연결...")
-
-def on_open(ws):
-    print("바이낸스 선물 웹소켓 실시간 연결 성공!")
-    update_bollinger_bands()
-
-# === 웹소켓 실행 무한 루프 ===
-def run_websocket():
-    stream_url = f"wss://fstream.binance.com/ws/{SYMBOL}@kline_{INTERVAL}"
-    ws = websocket.WebSocketApp(
-        stream_url,
-        on_open=on_open,
-        on_message=on_message,
-        on_error=on_error,
-        on_close=on_close
-    )
-    ws.run_forever()
-
-if __name__ == "__main__":
-    server_thread = threading.Thread(target=run_server)
-    server_thread.daemon = True
-    server_thread.start()
-    
-    while True:
-        try:
-            run_websocket()
-        except Exception as e:
-            print(f"루프 에러: {e}")
-        time.sleep(5)
+    # 3개의 글로벌 무료 프록시 서버 리
