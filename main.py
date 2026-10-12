@@ -54,6 +54,14 @@ def update_bollinger_bands():
         res = requests.get(url)
         data = res.json()
         
+        # === [진단 1] REST API 원본 응답 확인 ===
+        print(f"[REST 원본 응답] {str(data)[:200]}") 
+        
+        # 데이터가 리스트(정상적인 차트 데이터)가 아니라 딕셔너리(에러 메시지) 형태일 경우 차단 사유 출력
+        if isinstance(data, dict):
+            print(f"❌ 바이낸스 API 거절 사유 확인됨: {data}")
+            return
+            
         df = pd.DataFrame(data[:-1], columns=['Open_time', 'Open', 'High', 'Low', 'Close', 'Volume', 'Close_time', 'QA', 'Trades', 'Taker_buy_base', 'Taker_buy_quote', 'Ignore'])
         df['Close'] = df['Close'].astype(float)
         
@@ -73,6 +81,9 @@ def update_bollinger_bands():
 def on_message(ws, message):
     global alert_sent_this_candle, current_kline_start_time, prev_upper, prev_lower
     
+    # === [진단 2] 웹소켓 원본 메시지 수신 확인 ===
+    print(f"[WS 수신 데이터] {str(message)[:200]}")
+    
     data = json.loads(message)
     if 'k' not in data:
         return
@@ -81,9 +92,6 @@ def on_message(ws, message):
     start_time = kline['t']
     open_price = float(kline['o'])
     current_price = float(kline['c'])
-    
-    # === [점검 1차 관문] 실시간 데이터 수신 확인용 디버그 출력 ===
-    print(f"[수신 중] 틱 현재가: {current_price}")
     
     if start_time != current_kline_start_time:
         current_kline_start_time = start_time
@@ -108,7 +116,7 @@ def on_error(ws, error):
     print(f"웹소켓 에러 발생: {error}")
 
 def on_close(ws, close_status_code, close_msg):
-    print("웹소켓 연결 종료. 5초 뒤 재연결 시도...")
+    print(f"웹소켓 연결 종료 (코드: {close_status_code}, 사유: {close_msg}). 5초 뒤 재연결...")
 
 def on_open(ws):
     print("바이낸스 선물 웹소켓 실시간 연결 성공!")
