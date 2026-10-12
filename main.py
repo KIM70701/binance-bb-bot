@@ -46,29 +46,25 @@ def send_telegram_message(message):
     except Exception as e:
         print(f"텔레그램 전송 실패: {e}")
 
-# === 1봉 전 확정된 볼린저밴드 값 계산 (공식 백업 주소 사용) ===
+# === 1봉 전 확정된 볼린저밴드 값 계산 (초기 버전 복구 + 오류 로깅 유지) ===
 def update_bollinger_bands():
     global prev_upper, prev_lower
     
-    # 캐시 방지 타임스탬프
-    timestamp = int(time.time() * 1000)
-    
-    # === [수정된 부분] 바이낸스 공식 백업 서버 주소(fapi1) 사용 ===
-    target_url = f"https://fapi1.binance.com/fapi/v1/klines?symbol={SYMBOL.upper()}&interval={INTERVAL}&limit=100&_t={timestamp}"
+    # 원래 접속하려던 바이낸스 공식 주소 (fapi)
+    url = f"https://fapi.binance.com/fapi/v1/klines?symbol={SYMBOL.upper()}&interval={INTERVAL}&limit=100"
     
     try:
-        res = requests.get(target_url, timeout=10)
+        res = requests.get(url, timeout=10)
         data = res.json()
         
-        # [진단용] 통과 확인 출력
-        print(f"[REST 백업서버 응답] {str(data)[:100]}...") 
+        # [진단용] REST API 원본 응답 확인 (IP 밴 확인용)
+        print(f"[REST 원본 응답] {str(data)[:200]}") 
         
-        # 거절당했을 경우 방어 코드
-        if isinstance(data, dict) and 'code' in data:
-            print(f"❌ fapi1 백업 서버도 거절됨: {data}")
+        # 데이터가 리스트(정상적인 차트 데이터)가 아니라 딕셔너리(에러 메시지) 형태일 경우 차단 사유 출력
+        if isinstance(data, dict):
+            print(f"❌ 바이낸스 API 거절 사유 확인됨: {data}")
             return
             
-        # 정상 데이터 수신 시 볼린저밴드 계산 진행
         df = pd.DataFrame(data[:-1], columns=['Open_time', 'Open', 'High', 'Low', 'Close', 'Volume', 'Close_time', 'QA', 'Trades', 'Taker_buy_base', 'Taker_buy_quote', 'Ignore'])
         df['Close'] = df['Close'].astype(float)
         
@@ -88,7 +84,8 @@ def update_bollinger_bands():
 def on_message(ws, message):
     global alert_sent_this_candle, current_kline_start_time, prev_upper, prev_lower
     
-    print(f"[WS 수신 데이터] {str(message)[:50]}...")
+    # [진단용] 웹소켓 원본 메시지 수신 확인 (IP 변경 후 수신 재개 확인용)
+    print(f"[WS 수신 데이터] {str(message)[:200]}")
     
     data = json.loads(message)
     if 'k' not in data:
@@ -108,13 +105,14 @@ def on_message(ws, message):
     if alert_sent_this_candle:
         return
 
+    # 기준선이 정상적으로 한 번이라도 계산된 이후에만 조건 판별
     if prev_upper > 0 and prev_lower > 0:
         if (open_price < prev_upper) and (current_price >= prev_upper):
             msg = f"🚀 <b>ETHUSDT 상단 돌파!</b>\n\n현재가: {current_price}\nBB 상단: {prev_upper}\n\n차트를 확인하세요!"
             send_telegram_message(msg)
             alert_sent_this_candle = True
 
-        elif (open_price > prev_lower) and (current_price <= prev_lower):
+        elif (open_price > prev_lower) and (current_price 파> prev_lower) and (current_price <= prev_lower):
             msg = f"📉 <b>ETHUSDT 하단 이탈!</b>\n\n현재가: {current_price}\nBB 하단: {prev_lower}\n\n차트를 확인하세요!"
             send_telegram_message(msg)
             alert_sent_this_candle = True
@@ -123,7 +121,7 @@ def on_error(ws, error):
     print(f"웹소켓 에러 발생: {error}")
 
 def on_close(ws, close_status_code, close_msg):
-    print(f"웹소켓 연결 종료. 5초 뒤 재연결...")
+    print(f"웹소켓 연결 종료 (코드: {close_status_code}, 사유: {close_msg}). 5초 뒤 재연결...")
 
 def on_open(ws):
     print("바이낸스 선물 웹소켓 실시간 연결 성공!")
