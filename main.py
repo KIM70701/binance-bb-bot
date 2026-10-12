@@ -2,7 +2,6 @@ import json
 import time
 import threading
 import requests
-import urllib.parse
 import pandas as pd
 import websocket
 from flask import Flask
@@ -47,30 +46,26 @@ def send_telegram_message(message):
     except Exception as e:
         print(f"텔레그램 전송 실패: {e}")
 
-# === 1봉 전 확정된 볼린저밴드 값 계산 (IP 우회 통신 적용) ===
+# === 1봉 전 확정된 볼린저밴드 값 계산 (공식 백업 주소 사용) ===
 def update_bollinger_bands():
     global prev_upper, prev_lower
     
-    # 1. 원래 접속하려던 바이낸스 주소 (캐시 무력화용 타임스탬프 추가)
+    # 캐시 방지 타임스탬프
     timestamp = int(time.time() * 1000)
-    target_url = f"https://fapi.binance.com/fapi/v1/klines?symbol={SYMBOL.upper()}&interval={INTERVAL}&limit=100&_t={timestamp}"
     
-    # 2. 주소를 안전하게 텍스트로 변환
-    encoded_url = urllib.parse.quote(target_url, safe='')
-    
-    # 3. 우회 서버(AllOrigins)를 통해 요청 (바이낸스 IP 밴 회피)
-    proxy_url = f"https://api.allorigins.win/raw?url={encoded_url}"
+    # === [수정된 부분] 바이낸스 공식 백업 서버 주소(fapi1) 사용 ===
+    target_url = f"https://fapi1.binance.com/fapi/v1/klines?symbol={SYMBOL.upper()}&interval={INTERVAL}&limit=100&_t={timestamp}"
     
     try:
-        # 우회 서버로 요청 보내기 (응답 대기 10초 제한)
-        res = requests.get(proxy_url, timeout=10)
+        res = requests.get(target_url, timeout=10)
         data = res.json()
         
         # [진단용] 통과 확인 출력
-        print(f"[REST 우회 응답] {str(data)[:200]}") 
+        print(f"[REST 백업서버 응답] {str(data)[:100]}...") 
         
+        # 거절당했을 경우 방어 코드
         if isinstance(data, dict) and 'code' in data:
-            print(f"❌ 우회 실패 (여전히 거절됨): {data}")
+            print(f"❌ fapi1 백업 서버도 거절됨: {data}")
             return
             
         # 정상 데이터 수신 시 볼린저밴드 계산 진행
@@ -93,8 +88,7 @@ def update_bollinger_bands():
 def on_message(ws, message):
     global alert_sent_this_candle, current_kline_start_time, prev_upper, prev_lower
     
-    # [진단용] 실시간 데이터 수신 확인 (초당 여러 번 찍히면 정상)
-    print(f"[WS 수신 데이터] {str(message)[:100]}")
+    print(f"[WS 수신 데이터] {str(message)[:50]}...")
     
     data = json.loads(message)
     if 'k' not in data:
@@ -114,7 +108,6 @@ def on_message(ws, message):
     if alert_sent_this_candle:
         return
 
-    # 기준선이 정상적으로 한 번이라도 계산된 이후에만 조건 판별
     if prev_upper > 0 and prev_lower > 0:
         if (open_price < prev_upper) and (current_price >= prev_upper):
             msg = f"🚀 <b>ETHUSDT 상단 돌파!</b>\n\n현재가: {current_price}\nBB 상단: {prev_upper}\n\n차트를 확인하세요!"
@@ -130,7 +123,7 @@ def on_error(ws, error):
     print(f"웹소켓 에러 발생: {error}")
 
 def on_close(ws, close_status_code, close_msg):
-    print(f"웹소켓 연결 종료 (코드: {close_status_code}, 사유: {close_msg}). 5초 뒤 재연결...")
+    print(f"웹소켓 연결 종료. 5초 뒤 재연결...")
 
 def on_open(ws):
     print("바이낸스 선물 웹소켓 실시간 연결 성공!")
