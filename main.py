@@ -112,7 +112,7 @@ def on_message(ws, message):
             send_telegram_message(msg)
             alert_sent_this_candle = True
 
-        elif (open_price > prev_lower) and (current_price 파> prev_lower) and (current_price <= prev_lower):
+        elif (open_price > prev_lower) and (current_price <= prev_lower):
             msg = f"📉 <b>ETHUSDT 하단 이탈!</b>\n\n현재가: {current_price}\nBB 하단: {prev_lower}\n\n차트를 확인하세요!"
             send_telegram_message(msg)
             alert_sent_this_candle = True
