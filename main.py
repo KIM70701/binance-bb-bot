@@ -2,6 +2,7 @@ import json
 import time
 import threading
 import requests
+import urllib.parse
 import pandas as pd
 import websocket
 from flask import Flask
@@ -46,22 +47,33 @@ def send_telegram_message(message):
     except Exception as e:
         print(f"텔레그램 전송 실패: {e}")
 
-# === 1봉 전 확정된 볼린저밴드 값 계산 ===
+# === 1봉 전 확정된 볼린저밴드 값 계산 (IP 우회 통신 적용) ===
 def update_bollinger_bands():
     global prev_upper, prev_lower
-    url = f"https://fapi.binance.com/fapi/v1/klines?symbol={SYMBOL.upper()}&interval={INTERVAL}&limit=100"
+    
+    # 1. 원래 접속하려던 바이낸스 주소 (캐시 무력화용 타임스탬프 추가)
+    timestamp = int(time.time() * 1000)
+    target_url = f"https://fapi.binance.com/fapi/v1/klines?symbol={SYMBOL.upper()}&interval={INTERVAL}&limit=100&_t={timestamp}"
+    
+    # 2. 주소를 안전하게 텍스트로 변환
+    encoded_url = urllib.parse.quote(target_url, safe='')
+    
+    # 3. 우회 서버(AllOrigins)를 통해 요청 (바이낸스 IP 밴 회피)
+    proxy_url = f"https://api.allorigins.win/raw?url={encoded_url}"
+    
     try:
-        res = requests.get(url)
+        # 우회 서버로 요청 보내기 (응답 대기 10초 제한)
+        res = requests.get(proxy_url, timeout=10)
         data = res.json()
         
-        # === [진단 1] REST API 원본 응답 확인 ===
-        print(f"[REST 원본 응답] {str(data)[:200]}") 
+        # [진단용] 통과 확인 출력
+        print(f"[REST 우회 응답] {str(data)[:200]}") 
         
-        # 데이터가 리스트(정상적인 차트 데이터)가 아니라 딕셔너리(에러 메시지) 형태일 경우 차단 사유 출력
-        if isinstance(data, dict):
-            print(f"❌ 바이낸스 API 거절 사유 확인됨: {data}")
+        if isinstance(data, dict) and 'code' in data:
+            print(f"❌ 우회 실패 (여전히 거절됨): {data}")
             return
             
+        # 정상 데이터 수신 시 볼린저밴드 계산 진행
         df = pd.DataFrame(data[:-1], columns=['Open_time', 'Open', 'High', 'Low', 'Close', 'Volume', 'Close_time', 'QA', 'Trades', 'Taker_buy_base', 'Taker_buy_quote', 'Ignore'])
         df['Close'] = df['Close'].astype(float)
         
@@ -73,7 +85,7 @@ def update_bollinger_bands():
         prev_upper = round(df['Upper'].iloc[-1], 2)
         prev_lower = round(df['Lower'].iloc[-1], 2)
         
-        print(f"[기준선 갱신] 1봉 전 상단: {prev_upper}, 하단: {prev_lower}")
+        print(f"[기준선 갱신 성공] 1봉 전 상단: {prev_upper}, 하단: {prev_lower}")
     except Exception as e:
         print(f"BB 계산 중 에러 발생: {e}")
 
@@ -81,8 +93,8 @@ def update_bollinger_bands():
 def on_message(ws, message):
     global alert_sent_this_candle, current_kline_start_time, prev_upper, prev_lower
     
-    # === [진단 2] 웹소켓 원본 메시지 수신 확인 ===
-    print(f"[WS 수신 데이터] {str(message)[:200]}")
+    # [진단용] 실시간 데이터 수신 확인 (초당 여러 번 찍히면 정상)
+    print(f"[WS 수신 데이터] {str(message)[:100]}")
     
     data = json.loads(message)
     if 'k' not in data:
@@ -102,15 +114,17 @@ def on_message(ws, message):
     if alert_sent_this_candle:
         return
 
-    if (open_price < prev_upper) and (current_price >= prev_upper):
-        msg = f"🚀 <b>ETHUSDT 상단 돌파!</b>\n\n현재가: {current_price}\nBB 상단: {prev_upper}\n\n차트를 확인하세요!"
-        send_telegram_message(msg)
-        alert_sent_this_candle = True
+    # 기준선이 정상적으로 한 번이라도 계산된 이후에만 조건 판별
+    if prev_upper > 0 and prev_lower > 0:
+        if (open_price < prev_upper) and (current_price >= prev_upper):
+            msg = f"🚀 <b>ETHUSDT 상단 돌파!</b>\n\n현재가: {current_price}\nBB 상단: {prev_upper}\n\n차트를 확인하세요!"
+            send_telegram_message(msg)
+            alert_sent_this_candle = True
 
-    elif (open_price > prev_lower) and (current_price <= prev_lower):
-        msg = f"📉 <b>ETHUSDT 하단 이탈!</b>\n\n현재가: {current_price}\nBB 하단: {prev_lower}\n\n차트를 확인하세요!"
-        send_telegram_message(msg)
-        alert_sent_this_candle = True
+        elif (open_price > prev_lower) and (current_price <= prev_lower):
+            msg = f"📉 <b>ETHUSDT 하단 이탈!</b>\n\n현재가: {current_price}\nBB 하단: {prev_lower}\n\n차트를 확인하세요!"
+            send_telegram_message(msg)
+            alert_sent_this_candle = True
 
 def on_error(ws, error):
     print(f"웹소켓 에러 발생: {error}")
